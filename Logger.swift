@@ -39,34 +39,11 @@ public extension Logger {
     }
 }
 
-public protocol LogFactoryType {
-    var level: LogLevel { get set }
-    func create(class klass: Any.Type) -> Logger
-}
-
-public class LogFactory : LogFactoryType {
-    public static var singletonInstance: LogFactoryType = LogFactory() // reassignable
-    
-    /** Use this method to create class loggers */
-    public static func create(class klass: Any.Type) -> Logger {
-        return singletonInstance.create(class: klass)
-    }
-    
-    // instance methods
-    
-    public var level: LogLevel = .Debug // can change if reconfigured during runtime
-    
-    public func create(class klass: Any.Type) -> Logger {
-        Logger.self
-        return ClassLogger(parent: Log.singletonInstance, level: level, class: klass)
-    }
-}
-
 public struct LogConfiguration {
     /** The full path to the log output file. 
      If rotation is enabled, rotated logs will take this name but insert a number in between
      the name and the file extension. If no file extension is specified, .log will be used */
-    public let filePath:String
+    public let fileUrl:NSURL
     
     /** If set, log file writes and rotation operations are performed on a background queue.
      Else, writes are performed synchronously inline with the caller, and dispatch_sync is used.
@@ -94,7 +71,7 @@ public struct LogConfiguration {
     public let fileEncoding: NSStringEncoding
     
     public init(
-        filePath: String = "",
+        fileUrl: NSURL, // this one is mandatory
         async: Bool = true,
         rotationFileSize: Int? = nil,
         rotationInterval: NSTimeInterval? = nil,
@@ -102,7 +79,7 @@ public struct LogConfiguration {
         fileEncoding: NSStringEncoding = NSUTF8StringEncoding,
         alwaysFlush: Bool = true)
     {
-        self.filePath = filePath
+        self.fileUrl = fileUrl
         self.async = async
         self.rotationFileSize = rotationFileSize
         self.rotationInterval = rotationInterval
@@ -115,8 +92,11 @@ public struct LogConfiguration {
 /** This is the "Default" logger that you can use if you don't want to create a class logger.
  It also contains the singleton instance of the Root Logger that LogFactory refers to */
 public class Log : Logger {
+    
     /** reassignable, but reassigning the root logger may break things */
-    public static var singletonInstance: Logger = Log()
+    public static var singletonInstance: Log = Log()
+    
+    // Static interface which forwards to singletonInstance, makes it nice if you don't need multiple loggers
     
     public static func error(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line) {
         singletonInstance.write(level: .Error, message: message, function: function, file: file, line: line)
@@ -134,21 +114,32 @@ public class Log : Logger {
         singletonInstance.write(level: .Verbose, message: message, function: function, file: file, line: line)
     }
     
+    public static func createForClass(klass: Any.Type) -> Logger {
+        return singletonInstance.createForClass(klass)
+    }
+    
+    public static var configuration: LogConfiguration {
+        get { return singletonInstance.configuration }
+        set { singletonInstance.configuration = newValue }
+    }
+    
+    // Private properties
+    
+    private var _configuration: LogConfiguration?
+    private var _writer: LogFileWriter?
+    
     // Logger protocol
     
     public func write(level level: LogLevel, @autoclosure message: (Void -> String), function: String, file: String, line: Int) {
-        guard let writer = self.writer where level >= self.level else {
+        
+        // if we haven't got a writer assigned, or if the level isn't enough, do nothing
+        guard let writer = _writer where level >= self.level else {
             return
         }
         
         // we're definitely going to do the writing. Resolve the string and write to the log file
         writer.write(message())
-        
     }
-    
-    // Instance methods
-    
-    public var writer: LogFileWriter?
     
     public var level = LogLevel.Debug {
         didSet {
@@ -156,32 +147,46 @@ public class Log : Logger {
         }
     }
     
-    public var configuration = LogConfiguration() {
-        didSet {
-            writer = LogFileWriter(configuration: configuration)
+    // Public Instance methods
+    
+    public func createForClass(klass: Any.Type) -> Logger {
+        return ClassLogger(parent: Log.singletonInstance, level: level, class: klass)
+    }
+    
+    public var configuration: LogConfiguration {
+        get {
+            guard let c = _configuration else {
+                fatalError("get configuration as none is assigned")
+            }
+            return c
+        }
+        set {
+            _configuration = newValue
+            // now that we have some configuration, create the logWriter
+            _writer = LogFileWriter(configuration: newValue)
         }
     }
 }
 
 public class ClassLogger : Logger {
-    private let parent: Logger
-    private let klass: Any.Type
+    private let _parent: Logger
+    private let _class: Any.Type
     
     public var level:LogLevel // can change if reconfigured during runtime
     
     private init(parent: Logger, level: LogLevel, class klass: Any.Type) {
-        self.parent = parent
-        self.klass = klass
+        self._parent = parent
+        self._class = klass
         self.level = level
     }
     
     // Logger protocol
     
     public func write(level level: LogLevel, @autoclosure message: (Void -> String), function: String, file: String, line: Int) {
-        if level < self.level {
+        if level > self.level {
             return
         }
         
-        parent.write(level: level, message: "[\(klass)] \(message())", function: function, file: file, line: line)
+        _parent.write(level: level, message: "[\(_class)] \(message())", function: function, file: file, line: line)
     }
 }

@@ -31,15 +31,14 @@ public class LogFileWriter {
     }
     
     private func internalWrite(message: String) {
-        guard !_configuration.filePath.isEmpty else {
-            print("LogFileWriter: filePath is empty, can't write!")
-            return // Can't write to log without having configured a valid path
-        }
-        
-        guard let file = NSFileHandle(forUpdatingAtPath: _configuration.filePath) else {
-            print("LogFileWriter: can't open file at \(_configuration.filePath)")
+        var file:NSFileHandle
+        do {
+            file = try NSFileHandle(forUpdatingURL: _configuration.fileUrl)
+        } catch let err {
+            print("LogFileWriter: can't open file at \(_configuration.fileUrl)")
             return // can't create the file
         }
+        
         var fileOpen = true
         defer {
             if fileOpen {
@@ -90,7 +89,7 @@ public class LogFileWriter {
     }
     
     private func rotate() {
-        let originalUrl = NSURL(fileURLWithPath: _configuration.filePath)
+        let originalUrl = _configuration.fileUrl
         let ext = originalUrl.pathExtension ?? "log"
         
         // crash if someone gives us an invalid file name
@@ -99,17 +98,44 @@ public class LogFileWriter {
         let keepCount = _configuration.rotationKeepCount ?? 10000
         
         let deriveUrl:(Int) -> NSURL = { (num) in
-            
+            switch num {
+            case 0:
+                return pathNoExt.URLByAppendingPathExtension(ext)
+            default:
+                return pathNoExt.URLByAppendingPathExtension("\(num).ext")
+            }
         }
         
-        let ops:[AnyObject] = []
-        for i in 0..<keepCount {
+        var ops:[(Void -> Void)] = []
+        for i in 0...keepCount {
             let srcUrl = deriveUrl(i)
+            var error:NSError?
+            if !srcUrl.checkResourceIsReachableAndReturnError(&error) {
+                break // we've checked all the files that exist so far and scheduled all the ops
+            }
             
             let targetUrl = deriveUrl(i + 1)
-            
-//            ops.append { moveFile(originalUrl, ".1") }
+            if i < keepCount {
+                ops.append {
+                    do {
+                        try NSFileManager.defaultManager().moveItemAtURL(srcUrl, toURL: targetUrl)
+                    } catch let err {
+                        print("can't rotate log! - \(err)")
+                    }
+                }
+            } else { // too many files, delete this one
+                ops.append( {
+                    do {
+                        try NSFileManager.defaultManager().removeItemAtURL(targetUrl)
+                    } catch let err {
+                        print("can't delete max log! \(err)")
+                    }
+                })
+            }
         }
-        //ops: move baseName to baseName.1
+        
+        for op in ops.lazy.reverse() {
+            op()
+        }
     }
 }
