@@ -12,30 +12,77 @@ public enum LogLevel : Int, Comparable {
     case Error, Warn, Info, Debug, Verbose
 }
 
-public func <(a:LogLevel, b:LogLevel) -> Bool {
-    return a.rawValue < b.rawValue
+public struct LogParameters {
+    let function: String
+    let file: String
+    let line: Int
+    
+    let className: String?
+    let timeStamp: NSDate
+    
+    public init(function: String, file: String, line: Int, className: String? = nil, timeStamp: NSDate = NSDate()) {
+        self.function = function
+        self.file = file
+        self.line = line
+        self.className = className
+        self.timeStamp = timeStamp
+    }
+    
+    /** Copies the struct but overwrites the className */
+    public func withClassName(className: String) -> LogParameters {
+        return LogParameters(function: self.function, file: self.file, line: self.line, className: className, timeStamp: self.timeStamp)
+    }
 }
 
 public protocol Logger {
     var level: LogLevel { get set }
-    func write(level level:LogLevel, @autoclosure message:(Void -> String), function:String, file:String, line:Int)
+    func write(level level:LogLevel, @autoclosure message:(Void -> String), parameters: LogParameters)
 }
 
 public extension Logger {
-    public func error(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line) {
-        write(level: .Error, message: message, function: function, file: file, line: line)
+    public func error(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line, className: String? = nil) {
+        write(level: .Error, message: message, parameters: LogParameters(function: function, file: file, line: line, className: className))
     }
-    public func warn(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line) {
-        write(level: .Warn, message: message, function: function, file: file, line: line)
+    public func warn(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line, className: String? = nil) {
+        write(level: .Warn, message: message, parameters: LogParameters(function: function, file: file, line: line, className: className))
     }
-    public func info(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line) {
-        write(level: .Info, message: message, function: function, file: file, line: line)
+    public func info(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line, className: String? = nil) {
+        write(level: .Info, message: message, parameters: LogParameters(function: function, file: file, line: line, className: className))
     }
-    public func debug(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line) {
-        write(level: .Debug, message: message, function: function, file: file, line: line)
+    public func debug(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line, className: String? = nil) {
+        write(level: .Debug, message: message, parameters: LogParameters(function: function, file: file, line: line, className: className))
     }
-    public func verbose(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line) {
-        write(level: .Verbose, message: message, function: function, file: file, line: line)
+    public func verbose(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line, className: String? = nil) {
+        write(level: .Verbose, message: message, parameters: LogParameters(function: function, file: file, line: line, className: className))
+    }
+    
+    // note className needs to be a parameter on these things because swift 2.2 has static dispatch
+    // of protocol extension methods, so ClassLogger can't override them
+}
+
+public typealias LogFormatter = (String, LogParameters) -> String
+
+private var iso8601dateFormatter: NSDateFormatter?
+
+public func iso8601String(date:NSDate) -> String {
+    var formatter: NSDateFormatter
+    if let f = iso8601dateFormatter {
+        formatter = f
+    } else {
+        formatter = NSDateFormatter()
+        let enUSPosixLocale = NSLocale(localeIdentifier: "en_US_POSIX")
+        formatter.locale = enUSPosixLocale
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZZZZZ"
+    }
+    return formatter.stringFromDate(date)
+}
+
+public func defaultLogFormatter(message: String, parameters: LogParameters) -> String {
+    let timeStr = iso8601String(parameters.timeStamp)
+    if let className = parameters.className {
+        return "\(timeStr) [\(className)] \(message)"
+    } else {
+        return "\(timeStr) \(message)"
     }
 }
 
@@ -49,6 +96,9 @@ public struct LogConfiguration {
      Else, writes are performed synchronously inline with the caller, and dispatch_sync is used.
      Defaults to true */
     public let async:Bool
+    
+    /** Formatter function which produces the output string */
+    public let formatter:LogFormatter
     
     /** If set, file writes will always be flushed using NSFileHandle -synchronizeFile. Else, they won't.
      Defaults to true */
@@ -72,6 +122,7 @@ public struct LogConfiguration {
     
     public init(
         fileUrl: NSURL, // this one is mandatory
+        formatter: LogFormatter = defaultLogFormatter,
         async: Bool = true,
         rotationFileSize: Int? = nil,
         rotationInterval: NSTimeInterval? = nil,
@@ -80,6 +131,7 @@ public struct LogConfiguration {
         alwaysFlush: Bool = true)
     {
         self.fileUrl = fileUrl
+        self.formatter = formatter
         self.async = async
         self.rotationFileSize = rotationFileSize
         self.rotationInterval = rotationInterval
@@ -98,20 +150,20 @@ public class Log : Logger {
     
     // Static interface which forwards to singletonInstance, makes it nice if you don't need multiple loggers
     
-    public static func error(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line) {
-        singletonInstance.write(level: .Error, message: message, function: function, file: file, line: line)
+    public static func error(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line, className: String? = nil) {
+        singletonInstance.write(level: .Error, message: message, parameters: LogParameters(function: function, file: file, line: line, className: className))
     }
-    public static func warn(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line) {
-        singletonInstance.write(level: .Warn, message: message, function: function, file: file, line: line)
+    public static func warn(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line, className: String? = nil) {
+        singletonInstance.write(level: .Warn, message: message, parameters: LogParameters(function: function, file: file, line: line, className: className))
     }
-    public static func info(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line) {
-        singletonInstance.write(level: .Info, message: message, function: function, file: file, line: line)
+    public static func info(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line, className: String? = nil) {
+        singletonInstance.write(level: .Info, message: message, parameters: LogParameters(function: function, file: file, line: line, className: className))
     }
-    public static func debug(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line) {
-        singletonInstance.write(level: .Debug, message: message, function: function, file: file, line: line)
+    public static func debug(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line, className: String? = nil) {
+        singletonInstance.write(level: .Debug, message: message, parameters: LogParameters(function: function, file: file, line: line, className: className))
     }
-    public static func verbose(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line) {
-        singletonInstance.write(level: .Verbose, message: message, function: function, file: file, line: line)
+    public static func verbose(@autoclosure message:(Void -> String), function:String = #function, file:String = #file, line:Int = #line, className: String? = nil) {
+        singletonInstance.write(level: .Verbose, message: message, parameters: LogParameters(function: function, file: file, line: line, className: className))
     }
     
     public static func createForClass(klass: Any.Type) -> Logger {
@@ -130,10 +182,10 @@ public class Log : Logger {
     
     // Logger protocol
     
-    public func write(level level: LogLevel, @autoclosure message: (Void -> String), function: String, file: String, line: Int) {
+    public func write(level level: LogLevel, @autoclosure message: (Void -> String), parameters:LogParameters) {
         
         // if we haven't got a writer assigned, or if the level isn't enough, do nothing
-        guard let writer = _writer where level >= self.level else {
+        guard let writer = _writer where level <= self.level else {
             return
         }
         
@@ -182,11 +234,15 @@ public class ClassLogger : Logger {
     
     // Logger protocol
     
-    public func write(level level: LogLevel, @autoclosure message: (Void -> String), function: String, file: String, line: Int) {
+    public func write(level level: LogLevel, @autoclosure message: (Void -> String), parameters: LogParameters) {
         if level > self.level {
             return
         }
         
-        _parent.write(level: level, message: "[\(_class)] \(message())", function: function, file: file, line: line)
+        _parent.write(level: level, message: message(), parameters: parameters.withClassName(String(_class)))
     }
+}
+
+public func <(a:LogLevel, b:LogLevel) -> Bool {
+    return a.rawValue < b.rawValue
 }

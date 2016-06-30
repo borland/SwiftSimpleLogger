@@ -35,7 +35,7 @@ public class LogFileWriter {
         do {
             file = try NSFileHandle(forUpdatingURL: _configuration.fileUrl)
         } catch let err {
-            print("LogFileWriter: can't open file at \(_configuration.fileUrl)")
+            print("LogFileWriter: can't open file at \(_configuration.fileUrl) - \(err)")
             return // can't create the file
         }
         
