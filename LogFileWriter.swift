@@ -33,7 +33,18 @@ public class LogFileWriter {
     private func internalWrite(message: String) {
         var file:NSFileHandle
         do {
-            file = try NSFileHandle(forUpdatingURL: _configuration.fileUrl)
+            var error: NSError?
+            if !_configuration.fileUrl.checkResourceIsReachableAndReturnError(&error) {
+                // create if not exists
+                guard let path = _configuration.fileUrl.path else {
+                    print("LogFileWriter: can't open file at \(_configuration.fileUrl) - invalid path")
+                    return
+                }
+                NSFileManager.defaultManager().createFileAtPath(path, contents: nil, attributes: nil) // TODO attributes eg no backup
+            }
+            
+            file = try NSFileHandle(forWritingToURL: _configuration.fileUrl)
+            file.seekToEndOfFile()
         } catch let err {
             print("LogFileWriter: can't open file at \(_configuration.fileUrl) - \(err)")
             return // can't create the file
@@ -58,15 +69,18 @@ public class LogFileWriter {
             file.synchronizeFile() // do we want to do this every time?
         }
         
-        fileOpen = false
-        file.closeFile()
-        
         if _configuration.rotationFileSize != nil || _configuration.rotationInterval != nil {
+            let fd = file.fileDescriptor
+            
             var stats = stat()
-            if fstat(file.fileDescriptor, &stats) != 0 { // failed
+            
+            if fstat(fd, &stats) != 0 { // failed
                 print("LogFileWriter: can't stat file, rotation, etc won't work")
                 return
             }
+            
+            fileOpen = false  // can't stat the file after closing it
+            file.closeFile() // we need to close it before move
             
             if let maxSize = _configuration.rotationFileSize where stats.st_size >= off_t(maxSize) {
                 // rotate, file too big

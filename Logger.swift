@@ -60,29 +60,29 @@ public extension Logger {
     // of protocol extension methods, so ClassLogger can't override them
 }
 
-public typealias LogFormatter = (String, LogParameters) -> String
+public typealias LogFormatter = (String, LogLevel, LogParameters) -> String
 
-private var iso8601dateFormatter: NSDateFormatter?
+private var defaultDateFormatter: NSDateFormatter?
 
-public func iso8601String(date:NSDate) -> String {
+public func dateToString(date:NSDate) -> String {
     var formatter: NSDateFormatter
-    if let f = iso8601dateFormatter {
+    if let f = defaultDateFormatter {
         formatter = f
     } else {
         formatter = NSDateFormatter()
         let enUSPosixLocale = NSLocale(localeIdentifier: "en_US_POSIX")
         formatter.locale = enUSPosixLocale
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZZZZZ"
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
     }
     return formatter.stringFromDate(date)
 }
 
-public func defaultLogFormatter(message: String, parameters: LogParameters) -> String {
-    let timeStr = iso8601String(parameters.timeStamp)
+public func defaultLogFormatter(message: String, level: LogLevel, parameters: LogParameters) -> String {
+    let timeStr = dateToString(parameters.timeStamp)
     if let className = parameters.className {
-        return "\(timeStr) [\(className)] \(message)"
+        return "\(timeStr)\t\(level)\t[\(className)]\t\(message)"
     } else {
-        return "\(timeStr) \(message)"
+        return "\(timeStr)\t\(level)\t\(message)"
     }
 }
 
@@ -183,14 +183,15 @@ public class Log : Logger {
     // Logger protocol
     
     public func write(level level: LogLevel, @autoclosure message: (Void -> String), parameters:LogParameters) {
-        
         // if we haven't got a writer assigned, or if the level isn't enough, do nothing
         guard let writer = _writer where level <= self.level else {
             return
         }
         
         // we're definitely going to do the writing. Resolve the string and write to the log file
-        writer.write(message())
+        let resolved = configuration.formatter(message(), level, parameters)
+        print(resolved)
+        writer.write(resolved)
     }
     
     public var level = LogLevel.Debug {
